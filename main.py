@@ -226,3 +226,79 @@ def get_merkle_proof(leaves: list[bytes], index: int) -> list[bytes]:
         if idx % 2 == 0:
             sibling = idx + 1
         else:
+            sibling = idx - 1
+        if sibling < len(layer):
+            proof.append(layer[sibling])
+        idx //= 2
+    return proof
+
+def get_merkle_root(leaves: list[bytes]) -> bytes:
+    tree = build_merkle_tree(leaves)
+    if not tree:
+        return bytes(32)
+    return tree[-1][0]
+
+def proof_to_hex_list(proof: list[bytes]) -> list[str]:
+    return ["0x" + p.hex() for p in proof]
+
+# -----------------------------------------------------------------------------
+# Contract ABI (minimal for Pura usage)
+# -----------------------------------------------------------------------------
+
+DEW_DROPS_ABI = [
+    {"inputs": [{"name": "taskId", "type": "bytes32"}, {"name": "proofNonce", "type": "bytes32"}, {"name": "merkleProof", "type": "bytes32[]"}], "name": "claimDroplet", "outputs": [], "stateMutability": "payable", "type": "function"},
+    {"inputs": [{"name": "taskIds", "type": "bytes32[]"}, {"name": "proofNonces", "type": "bytes32[]"}, {"name": "merkleProofs", "type": "bytes32[][]"}], "name": "claimDropletBatch", "outputs": [], "stateMutability": "payable", "type": "function"},
+    {"inputs": [{"name": "taskId", "type": "bytes32"}], "name": "getTask", "outputs": [{"name": "taskKind", "type": "uint8"}, {"name": "rewardPerClaim", "type": "uint256"}, {"name": "endBlock", "type": "uint256"}, {"name": "merkleRoot", "type": "bytes32"}, {"name": "poolBalance", "type": "uint256"}, {"name": "disabled", "type": "bool"}, {"name": "totalClaimed", "type": "uint256"}], "stateMutability": "view", "type": "function"},
+    {"inputs": [{"name": "taskId", "type": "bytes32"}, {"name": "proofNonce", "type": "bytes32"}], "name": "hasFulfilled", "outputs": [{"name": "", "type": "bool"}], "stateMutability": "view", "type": "function"},
+    {"inputs": [{"name": "taskId", "type": "bytes32"}], "name": "isTaskActive", "outputs": [{"name": "", "type": "bool"}], "stateMutability": "view", "type": "function"},
+    {"inputs": [{"name": "offset", "type": "uint256"}, {"name": "limit", "type": "uint256"}], "name": "getTaskIdsPaginated", "outputs": [{"name": "out", "type": "bytes32[]"}], "stateMutability": "view", "type": "function"},
+    {"inputs": [{"name": "participant", "type": "address"}, {"name": "proofNonce", "type": "bytes32"}, {"name": "taskId", "type": "bytes32"}], "name": "computeLeaf", "outputs": [{"name": "", "type": "bytes32"}], "stateMutability": "pure", "type": "function"},
+    {"inputs": [{"name": "taskId", "type": "bytes32"}], "name": "getVestedAmount", "outputs": [{"name": "claimable", "type": "uint256"}], "stateMutability": "view", "type": "function"},
+    {"inputs": [{"name": "taskId", "type": "bytes32"}, {"name": "proofNonce", "type": "bytes32"}, {"name": "merkleProof", "type": "bytes32[]"}], "name": "claimDropletVested", "outputs": [], "stateMutability": "payable", "type": "function"},
+    {"inputs": [{"name": "taskId", "type": "bytes32"}], "name": "claimVested", "outputs": [], "stateMutability": "payable", "type": "function"},
+    {"inputs": [], "name": "paused", "outputs": [{"name": "", "type": "bool"}], "stateMutability": "view", "type": "function"},
+    {"inputs": [], "name": "contractBalance", "outputs": [{"name": "", "type": "uint256"}], "stateMutability": "view", "type": "function"},
+    {"inputs": [], "name": "taskCount", "outputs": [{"name": "", "type": "uint256"}], "stateMutability": "view", "type": "function"},
+    {"inputs": [{"name": "index", "type": "uint256"}], "name": "taskIdAt", "outputs": [{"name": "", "type": "bytes32"}], "stateMutability": "view", "type": "function"},
+    {"inputs": [{"name": "account", "type": "address"}], "name": "userTotalClaimed", "outputs": [{"name": "", "type": "uint256"}], "stateMutability": "view", "type": "function"},
+    {"inputs": [], "name": "globalTotalClaimed", "outputs": [{"name": "", "type": "uint256"}], "stateMutability": "view", "type": "function"},
+]
+
+# -----------------------------------------------------------------------------
+# Contract client (requires web3)
+# -----------------------------------------------------------------------------
+
+class DewDropsClient:
+    def __init__(self, rpc_url: str, contract_address: str, private_key: Optional[str] = None):
+        if not WEB3_AVAILABLE:
+            raise RuntimeError("web3 and eth_account are required for contract interaction. pip install web3 eth-account")
+        self.w3 = Web3(Web3.HTTPProvider(rpc_url))
+        self.contract_address = Web3.to_checksum_address(contract_address)
+        self.contract = self.w3.eth.contract(address=self.contract_address, abi=DEW_DROPS_ABI)
+        self.private_key = private_key
+        self.account = Account.from_key(private_key) if private_key else None
+
+    def is_connected(self) -> bool:
+        return self.w3.is_connected()
+
+    def get_task(self, task_id: str) -> tuple[int, int, int, str, int, bool, int]:
+        task_id_b32 = hex_to_bytes32(task_id) if len(task_id) == 66 else task_id
+        if isinstance(task_id_b32, bytes):
+            task_id_hex = "0x" + task_id_b32.hex()
+        else:
+            task_id_hex = task_id
+        return self.contract.functions.getTask(task_id_hex).call()
+
+    def has_fulfilled(self, task_id: str, proof_nonce: str) -> bool:
+        tid = hex_to_bytes32(task_id) if len(task_id) == 66 else task_id
+        pn = hex_to_bytes32(proof_nonce) if len(proof_nonce) == 66 else proof_nonce
+        return self.contract.functions.hasFulfilled("0x" + tid.hex() if isinstance(tid, bytes) else tid, "0x" + pn.hex() if isinstance(pn, bytes) else pn).call()
+
+    def is_task_active(self, task_id: str) -> bool:
+        tid = task_id if task_id.startswith("0x") and len(task_id) == 66 else "0x" + hex_to_bytes32(task_id).hex()
+        return self.contract.functions.isTaskActive(tid).call()
+
+    def paused(self) -> bool:
+        return self.contract.functions.paused().call()
+
+    def task_count(self) -> int:
