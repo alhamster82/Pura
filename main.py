@@ -530,3 +530,79 @@ def cmd_info(config: PuraConfig, address: Optional[str] = None) -> None:
 # -----------------------------------------------------------------------------
 
 def cmd_init_config(config: PuraConfig, chain: str = "sepolia", contract: Optional[str] = None, rpc: Optional[str] = None) -> None:
+    config.chain = chain
+    if contract:
+        config.contract_address = contract
+    if rpc:
+        config.rpc_url = rpc
+    config.save()
+    LOG.info("Config saved to %s", config.config_path(DEFAULT_CONFIG_FILE))
+
+# -----------------------------------------------------------------------------
+# Validation helpers
+# -----------------------------------------------------------------------------
+
+def validate_address(addr: str) -> bool:
+    if not addr or len(addr) < 40:
+        return False
+    if addr.startswith("0x"):
+        addr = addr[2:]
+    return len(addr) == 40 and all(c in "0123456789abcdefABCDEF" for c in addr)
+
+def validate_bytes32(s: str) -> bool:
+    if s.startswith("0x"):
+        s = s[2:]
+    return len(s) == 64 and all(c in "0123456789abcdefABCDEF" for c in s)
+
+def validate_task_kind(kind: int) -> bool:
+    return 0 <= kind <= MAX_TASK_KIND
+
+# -----------------------------------------------------------------------------
+# Task kind utilities
+# -----------------------------------------------------------------------------
+
+def task_kind_to_name(kind: int) -> str:
+    return TASK_KIND_NAMES[kind] if 0 <= kind < len(TASK_KIND_NAMES) else "custom"
+
+def task_name_to_kind(name: str) -> int:
+    name = name.lower().strip()
+    for i, n in enumerate(TASK_KIND_NAMES):
+        if n == name:
+            return i
+    return len(TASK_KIND_NAMES) - 1  # custom
+
+def list_task_kinds() -> list[tuple[int, str]]:
+    return list(enumerate(TASK_KIND_NAMES))
+
+# -----------------------------------------------------------------------------
+# Wei / Ether formatting
+# -----------------------------------------------------------------------------
+
+def wei_to_ether(wei: int) -> float:
+    return wei / 1e18
+
+def ether_to_wei(ether: float) -> int:
+    return int(ether * 1e18)
+
+def format_wei(wei: int) -> str:
+    if wei >= 1e18:
+        return f"{wei_to_ether(wei):.4f} ETH"
+    return f"{wei} wei"
+
+# -----------------------------------------------------------------------------
+# Sample leaves generator (for testing)
+# -----------------------------------------------------------------------------
+
+def generate_sample_leaves(task_id: str, addresses: list[str], nonce_prefix: str = "0x") -> list[dict[str, str]]:
+    out = []
+    for i, addr in enumerate(addresses):
+        nonce = f"{nonce_prefix}{i:064x}" if len(nonce_prefix) <= 2 else nonce_prefix + f"{i:064x}"
+        out.append({"address": addr, "proofNonce": nonce})
+    return out
+
+# -----------------------------------------------------------------------------
+# Export merkle root and proofs to contract-ready format
+# -----------------------------------------------------------------------------
+
+def export_merkle_for_guardian(leaves_path: str, task_id: str, output_path: Optional[str] = None) -> dict[str, Any]:
+    leaves_data = load_leaves(leaves_path)
