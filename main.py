@@ -378,3 +378,79 @@ def save_leaves(path: str, leaves: list[dict[str, Any]]) -> None:
         json.dump({"leaves": leaves}, f, indent=2)
 
 def load_tasks(path: str) -> list[dict[str, Any]]:
+    if not os.path.isfile(path):
+        return []
+    with open(path, encoding="utf-8") as f:
+        data = json.load(f)
+    return data if isinstance(data, list) else data.get("tasks", [])
+
+def save_tasks(path: str, tasks: list[dict[str, Any]]) -> None:
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump({"tasks": tasks}, f, indent=2)
+
+# -----------------------------------------------------------------------------
+# CLI: list tasks
+# -----------------------------------------------------------------------------
+
+def cmd_list_tasks(config: PuraConfig, limit: int = 20) -> None:
+    if not WEB3_AVAILABLE or not config.contract_address:
+        LOG.warning("Set contract_address in config and install web3 to list tasks")
+        return
+    client = DewDropsClient(config.effective_rpc, config.contract_address)
+    if not client.is_connected():
+        LOG.error("RPC not connected")
+        return
+    if client.paused():
+        LOG.warning("Contract is paused")
+    n = client.task_count()
+    LOG.info("Total tasks: %s", n)
+    for i in range(min(n, limit)):
+        tid = client.task_id_at(i)
+        try:
+            kind, reward, end_block, root, pool, disabled, claimed = client.get_task(tid)
+            active = client.is_task_active(tid)
+            name = TASK_KIND_NAMES[kind] if kind < len(TASK_KIND_NAMES) else "custom"
+            LOG.info("  [%s] %s reward=%s end=%s pool=%s active=%s disabled=%s", tid[:18], name, reward, end_block, pool, active, disabled)
+        except Exception as e:
+            LOG.debug("task %s: %s", tid, e)
+
+# -----------------------------------------------------------------------------
+# CLI: build merkle and save
+# -----------------------------------------------------------------------------
+
+def cmd_build_merkle(config: PuraConfig, task_id: str, leaves_path: Optional[str] = None) -> None:
+    path = leaves_path or config.config_path(config.leaves_file)
+    leaves_data = load_leaves(path)
+    if not leaves_data:
+        LOG.error("No leaves in %s", path)
+        return
+    task_id_hex = task_id if task_id.startswith("0x") and len(task_id) == 66 else "0x" + hex_to_bytes32(task_id).hex()
+    leaves: list[bytes] = []
+    for entry in leaves_data:
+        addr = entry.get("address", entry.get("participant", ""))
+        nonce = entry.get("proofNonce", entry.get("nonce", "0x" + "0" * 64))
+        leaf = build_leaf(addr, nonce, task_id_hex)
+        leaves.append(leaf)
+    root = get_merkle_root(leaves)
+    out_path = config.config_path(config.merkle_file)
+    config.ensure_config_dir()
+    output = {
+        "taskId": task_id_hex,
+        "merkleRoot": "0x" + root.hex(),
+        "numLeaves": len(leaves),
+        "proofs": [],
+    }
+    for i, entry in enumerate(leaves_data):
+        proof = get_merkle_proof(leaves, i)
+        output["proofs"].append({
+            "address": entry.get("address", entry.get("participant", "")),
+            "proofNonce": entry.get("proofNonce", entry.get("nonce", "0x" + "0" * 64)),
+            "merkleProof": proof_to_hex_list(proof),
+        })
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump(output, f, indent=2)
+    LOG.info("Merkle root %s saved to %s (%s leaves)", output["merkleRoot"], out_path, len(leaves))
+
+# -----------------------------------------------------------------------------
+# CLI: claim single
