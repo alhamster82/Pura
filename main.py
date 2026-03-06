@@ -150,3 +150,79 @@ def keccak256(data: bytes) -> bytes:
         return Web3.solidity_keccak(["bytes"], [data])
     try:
         from Crypto.Hash import keccak
+        k = keccak.new(digest_bits=256)
+        k.update(data)
+        return k.digest()
+    except ImportError:
+        return hashlib.sha256(data).digest()
+
+def bytes32_to_hex(b: bytes) -> str:
+    return "0x" + b.hex() if len(b) <= 32 else "0x" + b[:32].hex()
+
+def hex_to_bytes32(s: str) -> bytes:
+    if s.startswith("0x"):
+        s = s[2:]
+    return bytes.fromhex(s.zfill(64))[:32]
+
+def address_to_bytes(addr: str) -> bytes:
+    if addr.startswith("0x"):
+        addr = addr[2:]
+    return bytes.fromhex(addr.zfill(40))
+
+# -----------------------------------------------------------------------------
+# Leaf and Merkle (DewDrops domain)
+# -----------------------------------------------------------------------------
+
+DOMAIN_SEED_BYTES = keccak256(DOMAIN_SEED_STR.encode()) if not WEB3_AVAILABLE else None
+
+def build_leaf(participant: str, proof_nonce: str, task_id: str) -> bytes:
+    """Build leaf hash: keccak256(abi.encodePacked(participant, proofNonce, taskId, DOMAIN_SEED))."""
+    participant_b = address_to_bytes(participant)
+    proof_nonce_b = hex_to_bytes32(proof_nonce) if isinstance(proof_nonce, str) else (proof_nonce if len(proof_nonce) == 32 else proof_nonce[:32])
+    task_id_b = hex_to_bytes32(task_id) if isinstance(task_id, str) else (task_id if len(task_id) == 32 else task_id[:32])
+    if WEB3_AVAILABLE:
+        domain_seed = Web3.solidity_keccak(["string"], [DOMAIN_SEED_STR])
+    else:
+        domain_seed = hashlib.sha256(DOMAIN_SEED_STR.encode()).digest()
+    payload = participant_b + proof_nonce_b + task_id_b + domain_seed
+    return keccak256(payload)
+
+def build_leaf_hex(participant: str, proof_nonce: str, task_id: str) -> str:
+    return "0x" + build_leaf(participant, proof_nonce, task_id).hex()
+
+# -----------------------------------------------------------------------------
+# Merkle tree build and proof
+# -----------------------------------------------------------------------------
+
+def merkle_parent(left: bytes, right: bytes) -> bytes:
+    if left < right:
+        return keccak256(left + right)
+    return keccak256(right + left)
+
+def build_merkle_tree(leaves: list[bytes]) -> list[list[bytes]]:
+    if not leaves:
+        return []
+    tree: list[list[bytes]] = [list(leaves)]
+    layer = list(leaves)
+    while len(layer) > 1:
+        next_layer: list[bytes] = []
+        for i in range(0, len(layer), 2):
+            if i + 1 < len(layer):
+                next_layer.append(merkle_parent(layer[i], layer[i + 1]))
+            else:
+                next_layer.append(layer[i])
+        tree.append(next_layer)
+        layer = next_layer
+    return tree
+
+def get_merkle_proof(leaves: list[bytes], index: int) -> list[bytes]:
+    tree = build_merkle_tree(leaves)
+    if index < 0 or index >= len(leaves):
+        return []
+    proof: list[bytes] = []
+    idx = index
+    for level in range(len(tree) - 1):
+        layer = tree[level]
+        if idx % 2 == 0:
+            sibling = idx + 1
+        else:
