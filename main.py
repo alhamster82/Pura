@@ -302,3 +302,79 @@ class DewDropsClient:
         return self.contract.functions.paused().call()
 
     def task_count(self) -> int:
+        return self.contract.functions.taskCount().call()
+
+    def task_id_at(self, index: int) -> str:
+        return self.contract.functions.taskIdAt(index).call()
+
+    def get_task_ids_paginated(self, offset: int, limit: int) -> list[str]:
+        return self.contract.functions.getTaskIdsPaginated(offset, limit).call()
+
+    def user_total_claimed(self, address: str) -> int:
+        return self.contract.functions.userTotalClaimed(Web3.to_checksum_address(address)).call()
+
+    def global_total_claimed(self) -> int:
+        return self.contract.functions.globalTotalClaimed().call()
+
+    def contract_balance(self) -> int:
+        return self.contract.functions.contractBalance().call()
+
+    def get_vested_amount(self, task_id: str, address: str) -> int:
+        tid = task_id if task_id.startswith("0x") and len(task_id) == 66 else "0x" + hex_to_bytes32(task_id).hex()
+        return self.contract.functions.getVestedAmount(tid, Web3.to_checksum_address(address)).call()
+
+    def claim_droplet(self, task_id: str, proof_nonce: str, merkle_proof: list[str]) -> str:
+        if not self.account:
+            raise ValueError("Private key required for claiming")
+        tid = task_id if task_id.startswith("0x") and len(task_id) == 66 else "0x" + hex_to_bytes32(task_id).hex()
+        pn = proof_nonce if proof_nonce.startswith("0x") and len(proof_nonce) == 66 else "0x" + hex_to_bytes32(proof_nonce).hex()
+        tx = self.contract.functions.claimDroplet(tid, pn, merkle_proof).build_transaction({
+            "from": self.account.address,
+            "gas": 200_000,
+        })
+        signed = self.w3.eth.account.sign_transaction(tx, self.account.key)
+        tx_hash = self.w3.eth.send_raw_transaction(signed.raw_transaction)
+        return tx_hash.hex()
+
+    def claim_droplet_batch(self, task_ids: list[str], proof_nonces: list[str], merkle_proofs: list[list[str]]) -> str:
+        if not self.account:
+            raise ValueError("Private key required for claiming")
+        tid_hex = [t if t.startswith("0x") and len(t) == 66 else "0x" + hex_to_bytes32(t).hex() for t in task_ids]
+        pn_hex = [p if p.startswith("0x") and len(p) == 66 else "0x" + hex_to_bytes32(p).hex() for p in proof_nonces]
+        tx = self.contract.functions.claimDropletBatch(tid_hex, pn_hex, merkle_proofs).build_transaction({
+            "from": self.account.address,
+            "gas": 500_000,
+        })
+        signed = self.w3.eth.account.sign_transaction(tx, self.account.key)
+        tx_hash = self.w3.eth.send_raw_transaction(signed.raw_transaction)
+        return tx_hash.hex()
+
+    def claim_vested(self, task_id: str) -> str:
+        if not self.account:
+            raise ValueError("Private key required")
+        tid = task_id if task_id.startswith("0x") and len(task_id) == 66 else "0x" + hex_to_bytes32(task_id).hex()
+        tx = self.contract.functions.claimVested(tid).build_transaction({
+            "from": self.account.address,
+            "gas": 150_000,
+        })
+        signed = self.w3.eth.account.sign_transaction(tx, self.account.key)
+        tx_hash = self.w3.eth.send_raw_transaction(signed.raw_transaction)
+        return tx_hash.hex()
+
+# -----------------------------------------------------------------------------
+# Leaves / eligibility list handling
+# -----------------------------------------------------------------------------
+
+def load_leaves(path: str) -> list[dict[str, str]]:
+    with open(path, encoding="utf-8") as f:
+        data = json.load(f)
+    if isinstance(data, list):
+        return data
+    return data.get("leaves", data.get("entries", []))
+
+def save_leaves(path: str, leaves: list[dict[str, Any]]) -> None:
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump({"leaves": leaves}, f, indent=2)
+
+def load_tasks(path: str) -> list[dict[str, Any]]:
