@@ -454,3 +454,79 @@ def cmd_build_merkle(config: PuraConfig, task_id: str, leaves_path: Optional[str
 
 # -----------------------------------------------------------------------------
 # CLI: claim single
+# -----------------------------------------------------------------------------
+
+def cmd_claim(config: PuraConfig, task_id: str, proof_nonce: str, merkle_path: Optional[str] = None) -> None:
+    if not config.private_key or not config.contract_address:
+        LOG.error("Set private_key and contract_address in config")
+        return
+    merkle_path = merkle_path or config.config_path(config.merkle_file)
+    if not os.path.isfile(merkle_path):
+        LOG.error("Merkle file not found: %s. Run build-merkle first.", merkle_path)
+        return
+    with open(merkle_path, encoding="utf-8") as f:
+        data = json.load(f)
+    proofs = data.get("proofs", [])
+    task_id_hex = task_id if task_id.startswith("0x") and len(task_id) == 66 else "0x" + hex_to_bytes32(task_id).hex()
+    pn_hex = proof_nonce if proof_nonce.startswith("0x") and len(proof_nonce) == 66 else "0x" + hex_to_bytes32(proof_nonce).hex()
+    if not WEB3_AVAILABLE:
+        LOG.error("web3 required for claim")
+        return
+    client = DewDropsClient(config.effective_rpc, config.contract_address, config.private_key)
+    if client.paused():
+        LOG.error("Contract is paused")
+        return
+    for p in proofs:
+        if p.get("proofNonce", p.get("nonce")) == pn_hex and p.get("address", p.get("participant")) == client.account.address:
+            tx_hash = client.claim_droplet(task_id_hex, pn_hex, p.get("merkleProof", []))
+            LOG.info("Claim tx: %s", tx_hash)
+            return
+    LOG.error("No proof found for this address and proofNonce in %s", merkle_path)
+
+# -----------------------------------------------------------------------------
+# CLI: claim vested
+# -----------------------------------------------------------------------------
+
+def cmd_claim_vested(config: PuraConfig, task_id: str) -> None:
+    if not config.private_key or not config.contract_address:
+        LOG.error("Set private_key and contract_address in config")
+        return
+    if not WEB3_AVAILABLE:
+        LOG.error("web3 required")
+        return
+    client = DewDropsClient(config.effective_rpc, config.contract_address, config.private_key)
+    amount = client.get_vested_amount(task_id, client.account.address)
+    if amount == 0:
+        LOG.warning("No vested amount to claim for this task")
+        return
+    tx_hash = client.claim_vested(task_id)
+    LOG.info("Claim vested tx: %s", tx_hash)
+
+# -----------------------------------------------------------------------------
+# CLI: info (user stats, global stats)
+# -----------------------------------------------------------------------------
+
+def cmd_info(config: PuraConfig, address: Optional[str] = None) -> None:
+    if not config.contract_address or not WEB3_AVAILABLE:
+        LOG.warning("contract_address and web3 required")
+        return
+    client = DewDropsClient(config.effective_rpc, config.contract_address)
+    if not client.is_connected():
+        LOG.error("RPC not connected")
+        return
+    global_claimed = client.global_total_claimed()
+    balance = client.contract_balance()
+    task_count = client.task_count()
+    LOG.info("Contract balance: %s wei | Global claimed: %s wei | Tasks: %s", balance, global_claimed, task_count)
+    addr = address or (client.account.address if config.private_key and client.account else None)
+    if addr:
+        if not client.account and not address:
+            client = DewDropsClient(config.effective_rpc, config.contract_address)
+        user_claimed = client.user_total_claimed(addr)
+        LOG.info("User %s total claimed: %s wei", addr[:16], user_claimed)
+
+# -----------------------------------------------------------------------------
+# CLI: init config
+# -----------------------------------------------------------------------------
+
+def cmd_init_config(config: PuraConfig, chain: str = "sepolia", contract: Optional[str] = None, rpc: Optional[str] = None) -> None:
