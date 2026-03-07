@@ -682,3 +682,79 @@ def cmd_export_merkle(config: PuraConfig, task_id: str, leaves_path: Optional[st
     export_merkle_for_guardian(path, task_id, out)
     LOG.info("Exported merkle to %s", out)
 
+# -----------------------------------------------------------------------------
+# Subparser registration (continued in main)
+# -----------------------------------------------------------------------------
+
+# -----------------------------------------------------------------------------
+# Hex and bytes utilities
+# -----------------------------------------------------------------------------
+
+def to_hex(b: bytes) -> str:
+    return "0x" + b.hex()
+
+def from_hex(s: str) -> bytes:
+    s = s.removeprefix("0x")
+    return bytes.fromhex(s)
+
+def task_id_to_hex(task_id: str | bytes) -> str:
+    if isinstance(task_id, bytes):
+        return "0x" + task_id.hex()
+    if task_id.startswith("0x") and len(task_id) == 66:
+        return task_id
+    return "0x" + hex_to_bytes32(task_id).hex()
+
+def proof_nonce_to_hex(nonce: str | bytes) -> str:
+    if isinstance(nonce, bytes):
+        return "0x" + nonce.hex()
+    if nonce.startswith("0x") and len(nonce) == 66:
+        return nonce
+    return "0x" + hex_to_bytes32(nonce).hex()
+
+# -----------------------------------------------------------------------------
+# Merkle verification (off-chain check)
+# -----------------------------------------------------------------------------
+
+def verify_merkle_proof(leaf: bytes, proof: list[bytes], root: bytes) -> bool:
+    h = leaf
+    for p in proof:
+        if h < p:
+            h = keccak256(h + p)
+        else:
+            h = keccak256(p + h)
+    return h == root
+
+def verify_merkle_proof_hex(leaf_hex: str, proof_hex: list[str], root_hex: str) -> bool:
+    leaf = from_hex(leaf_hex)
+    proof = [from_hex(p) for p in proof_hex]
+    root = from_hex(root_hex)
+    return verify_merkle_proof(leaf, proof, root)
+
+# -----------------------------------------------------------------------------
+# Batch eligibility check
+# -----------------------------------------------------------------------------
+
+def get_eligible_claims(merkle_path: str, address: str) -> list[dict[str, Any]]:
+    with open(merkle_path, encoding="utf-8") as f:
+        data = json.load(f)
+    task_id = data.get("taskId", "")
+    proofs = data.get("proofs", [])
+    return [{"taskId": task_id, "proofNonce": p.get("proofNonce", p.get("nonce")), "merkleProof": p.get("merkleProof", [])} for p in proofs if p.get("address", p.get("participant", "")).lower() == address.lower()]
+
+# -----------------------------------------------------------------------------
+# Config validation
+# -----------------------------------------------------------------------------
+
+def validate_config(config: PuraConfig) -> list[str]:
+    errors = []
+    if not config.contract_address and config.contract_address is not None:
+        errors.append("contract_address is empty")
+    if config.contract_address and not validate_address(config.contract_address):
+        errors.append("contract_address is not a valid 40-char hex address")
+    if config.private_key and len(config.private_key) != 66 and not config.private_key.startswith("0x"):
+        errors.append("private_key should be 0x-prefixed 64 hex chars")
+    if config.chain and config.chain not in CHAINS:
+        errors.append(f"chain must be one of {list(CHAINS.keys())}")
+    return errors
+
+# -----------------------------------------------------------------------------
