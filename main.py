@@ -606,3 +606,79 @@ def generate_sample_leaves(task_id: str, addresses: list[str], nonce_prefix: str
 
 def export_merkle_for_guardian(leaves_path: str, task_id: str, output_path: Optional[str] = None) -> dict[str, Any]:
     leaves_data = load_leaves(leaves_path)
+    task_id_hex = task_id if task_id.startswith("0x") and len(task_id) == 66 else "0x" + hex_to_bytes32(task_id).hex()
+    leaves = [build_leaf(e.get("address", e.get("participant", "")), e.get("proofNonce", e.get("nonce", "0x" + "0" * 64)), task_id_hex) for e in leaves_data]
+    root = get_merkle_root(leaves)
+    proofs = []
+    for i, entry in enumerate(leaves_data):
+        proof = get_merkle_proof(leaves, i)
+        proofs.append({
+            "address": entry.get("address", entry.get("participant", "")),
+            "proofNonce": entry.get("proofNonce", entry.get("nonce", "0x" + "0" * 64)),
+            "merkleProof": proof_to_hex_list(proof),
+        })
+    result = {"taskId": task_id_hex, "merkleRoot": "0x" + root.hex(), "numLeaves": len(leaves), "proofs": proofs}
+    if output_path:
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+        with open(output_path, "w", encoding="utf-8") as f:
+            json.dump(result, f, indent=2)
+    return result
+
+# -----------------------------------------------------------------------------
+# Check eligibility from leaves file
+# -----------------------------------------------------------------------------
+
+def check_eligibility(leaves_path: str, task_id: str, address: str, proof_nonce: Optional[str] = None) -> Optional[dict[str, Any]]:
+    leaves_data = load_leaves(leaves_path)
+    task_id_hex = task_id if task_id.startswith("0x") and len(task_id) == 66 else "0x" + hex_to_bytes32(task_id).hex()
+    for i, entry in enumerate(leaves_data):
+        addr = entry.get("address", entry.get("participant", ""))
+        if addr.lower() != address.lower():
+            continue
+        nonce = entry.get("proofNonce", entry.get("nonce", "0x" + "0" * 64))
+        if proof_nonce and nonce != proof_nonce:
+            continue
+        leaves = [build_leaf(e.get("address", e.get("participant", "")), e.get("proofNonce", e.get("nonce", "0x" + "0" * 64)), task_id_hex) for e in leaves_data]
+        proof = get_merkle_proof(leaves, i)
+        return {"address": addr, "proofNonce": nonce, "merkleProof": proof_to_hex_list(proof), "index": i}
+    return None
+
+# -----------------------------------------------------------------------------
+# Batch claim from merkle file (all eligible for one address)
+# -----------------------------------------------------------------------------
+
+def get_all_proofs_for_address(merkle_path: str, address: str) -> list[dict[str, Any]]:
+    with open(merkle_path, encoding="utf-8") as f:
+        data = json.load(f)
+    proofs = data.get("proofs", [])
+    task_id = data.get("taskId", "")
+    return [p for p in proofs if p.get("address", p.get("participant", "")).lower() == address.lower()]
+
+# -----------------------------------------------------------------------------
+# CLI: check-eligibility
+# -----------------------------------------------------------------------------
+
+def cmd_check_eligibility(config: PuraConfig, task_id: str, address: str, leaves_path: Optional[str] = None) -> None:
+    path = leaves_path or config.config_path(config.leaves_file)
+    if not os.path.isfile(path):
+        LOG.error("Leaves file not found: %s", path)
+        return
+    result = check_eligibility(path, task_id, address)
+    if result:
+        LOG.info("Eligible: address=%s proofNonce=%s proofLen=%s", address, result["proofNonce"], len(result["merkleProof"]))
+    else:
+        LOG.info("Not found in leaves for this task")
+
+# -----------------------------------------------------------------------------
+# CLI: export-merkle
+# -----------------------------------------------------------------------------
+
+def cmd_export_merkle(config: PuraConfig, task_id: str, leaves_path: Optional[str] = None, output: Optional[str] = None) -> None:
+    path = leaves_path or config.config_path(config.leaves_file)
+    out = output or config.config_path(config.merkle_file)
+    if not os.path.isfile(path):
+        LOG.error("Leaves file not found: %s", path)
+        return
+    export_merkle_for_guardian(path, task_id, out)
+    LOG.info("Exported merkle to %s", out)
+
