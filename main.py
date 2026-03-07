@@ -758,3 +758,79 @@ def validate_config(config: PuraConfig) -> list[str]:
     return errors
 
 # -----------------------------------------------------------------------------
+# Default paths
+# -----------------------------------------------------------------------------
+
+def default_leaves_path(config_dir: str) -> str:
+    return os.path.join(config_dir, DEFAULT_LEAVES_FILE)
+
+def default_merkle_path(config_dir: str) -> str:
+    return os.path.join(config_dir, DEFAULT_MERKLE_FILE)
+
+def default_tasks_path(config_dir: str) -> str:
+    return os.path.join(config_dir, DEFAULT_TASKS_FILE)
+
+# -----------------------------------------------------------------------------
+# Task summary formatter
+# -----------------------------------------------------------------------------
+
+def format_task_summary(kind: int, reward: int, end_block: int, pool: int, disabled: bool, claimed: int, active: bool) -> str:
+    name = task_kind_to_name(kind)
+    return (
+        f"kind={name} reward={format_wei(reward)} endBlock={end_block} "
+        f"pool={format_wei(pool)} disabled={disabled} claimed={format_wei(claimed)} active={active}"
+    )
+
+# -----------------------------------------------------------------------------
+# CLI: tasks (list from file)
+# -----------------------------------------------------------------------------
+
+def cmd_list_tasks_file(config: PuraConfig, tasks_path: Optional[str] = None) -> None:
+    path = tasks_path or config.config_path(config.tasks_file)
+    tasks = load_tasks(path)
+    if not tasks:
+        LOG.info("No tasks in %s", path)
+        return
+    for t in tasks:
+        LOG.info("  %s", t)
+
+# -----------------------------------------------------------------------------
+# Random proof nonce (for testing)
+# -----------------------------------------------------------------------------
+
+def random_proof_nonce() -> str:
+    import secrets
+    return "0x" + secrets.token_hex(32)
+
+def random_task_id() -> str:
+    import secrets
+    return "0x" + secrets.token_hex(32)
+
+# -----------------------------------------------------------------------------
+# Chain info
+# -----------------------------------------------------------------------------
+
+def get_chain_info(chain: str) -> Optional[ChainConfig]:
+    return CHAINS.get(chain)
+
+def list_chains() -> list[str]:
+    return list(CHAINS.keys())
+
+# -----------------------------------------------------------------------------
+# Dew-Drops leaf format (for createTask / merkle root)
+# -----------------------------------------------------------------------------
+# Each leaf = keccak256(abi.encodePacked(participant, proofNonce, taskId, DOMAIN_SEED))
+# DOMAIN_SEED = keccak256("DewDrops.Mist.v2") in contract; we use same in build_leaf.
+# Leaves file: JSON array of { "address": "0x...", "proofNonce": "0x..." }.
+# -----------------------------------------------------------------------------
+
+def create_sample_leaves_file(path: str, num: int = 10, task_id: Optional[str] = None) -> list[dict[str, str]]:
+    leaves = []
+    tid = task_id or random_task_id()
+    for i in range(num):
+        addr = "0x" + "a" * 40 if i == 0 else "0x" + (f"%040x" % (i + 1))
+        nonce = random_proof_nonce()
+        leaves.append({"address": addr, "proofNonce": nonce})
+    save_leaves(path, leaves)
+    return leaves
+
