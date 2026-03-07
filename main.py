@@ -834,3 +834,79 @@ def create_sample_leaves_file(path: str, num: int = 10, task_id: Optional[str] =
     save_leaves(path, leaves)
     return leaves
 
+# -----------------------------------------------------------------------------
+# Gas price helpers (optional)
+# -----------------------------------------------------------------------------
+
+def get_gas_price_suggestion(rpc_url: str) -> Optional[int]:
+    if not WEB3_AVAILABLE:
+        return None
+    try:
+        w3 = Web3(Web3.HTTPProvider(rpc_url))
+        return w3.eth.gas_price
+    except Exception:
+        return None
+
+# -----------------------------------------------------------------------------
+# Nonce for transaction (avoid replay)
+# -----------------------------------------------------------------------------
+
+def get_next_nonce(rpc_url: str, address: str) -> int:
+    if not WEB3_AVAILABLE:
+        return 0
+    try:
+        w3 = Web3(Web3.HTTPProvider(rpc_url))
+        return w3.eth.get_transaction_count(Web3.to_checksum_address(address))
+    except Exception:
+        return 0
+
+# -----------------------------------------------------------------------------
+# Documentation strings for CLI help
+# -----------------------------------------------------------------------------
+
+CLI_HELP_INTRO = """
+Pura is the companion app for Dew-Drops: an airdrop platform for social media tasks.
+Find your inner dew by completing tasks and claiming droplets.
+
+Commands:
+  init              Create or update config (chain, contract, rpc).
+  list-tasks        List tasks from the on-chain contract.
+  build-merkle      Build merkle tree from leaves JSON; output root and proofs.
+  claim             Claim one droplet (task + proof nonce + merkle file).
+  claim-vested      Claim vested rewards for a task.
+  check-eligibility Check if an address appears in leaves for a task.
+  export-merkle     Export merkle root and proofs (for guardian / createTask).
+  import-csv        Import leaves from a CSV file.
+  info              Show contract balance, global claimed, user claimed.
+  health            Check RPC and contract connectivity.
+  list-tasks-file   List tasks from local tasks JSON.
+
+Config: by default ~/.pura/config.json. Use --config to override.
+"""
+
+# -----------------------------------------------------------------------------
+# Safe JSON read/write
+# -----------------------------------------------------------------------------
+
+def read_json_safe(path: str, default: Any = None) -> Any:
+    if default is None:
+        default = {}
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return default
+
+def write_json_safe(path: str, data: Any) -> None:
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+
+# -----------------------------------------------------------------------------
+# Environment overrides
+# -----------------------------------------------------------------------------
+
+def config_from_env() -> dict[str, Any]:
+    out = {}
+    if os.environ.get("PURA_RPC_URL"):
+        out["rpc_url"] = os.environ.get("PURA_RPC_URL")
