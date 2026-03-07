@@ -910,3 +910,79 @@ def config_from_env() -> dict[str, Any]:
     out = {}
     if os.environ.get("PURA_RPC_URL"):
         out["rpc_url"] = os.environ.get("PURA_RPC_URL")
+    if os.environ.get("PURA_CONTRACT"):
+        out["contract_address"] = os.environ.get("PURA_CONTRACT")
+    if os.environ.get("PURA_CHAIN"):
+        out["chain"] = os.environ.get("PURA_CHAIN")
+    if os.environ.get("PURA_PRIVATE_KEY"):
+        out["private_key"] = os.environ.get("PURA_PRIVATE_KEY")
+    return out
+
+def apply_env_to_config(config: PuraConfig) -> PuraConfig:
+    env = config_from_env()
+    for k, v in env.items():
+        setattr(config, k, v)
+    return config
+
+# -----------------------------------------------------------------------------
+# Dew-Drops task kinds (aligned with contract)
+# -----------------------------------------------------------------------------
+# 0=twitter 1=discord 2=telegram 3=retweet 4=quote 5=like 6=comment
+# 7=join 8=share 9=watch 10=follow 11=custom
+# -----------------------------------------------------------------------------
+
+def task_kind_description(kind: int) -> str:
+    descs = [
+        "Follow, like, or retweet on Twitter",
+        "Join server, react, or message on Discord",
+        "Join channel or forward on Telegram",
+        "Retweet a specific tweet",
+        "Quote tweet",
+        "Like a post",
+        "Comment on a post",
+        "Join a community",
+        "Share a link",
+        "Watch a video",
+        "Follow an account",
+        "Custom task type",
+    ]
+    return descs[kind] if 0 <= kind < len(descs) else "Custom"
+
+def all_task_kind_descriptions() -> list[tuple[int, str, str]]:
+    return [(i, TASK_KIND_NAMES[i], task_kind_description(i)) for i in range(len(TASK_KIND_NAMES))]
+
+# -----------------------------------------------------------------------------
+# Register extra commands
+# -----------------------------------------------------------------------------
+
+def register_extra_commands(subparsers: Any, parser: Any) -> None:
+    p_init = subparsers.add_parser("init", help="Initialize config file")
+    p_init.add_argument("--chain", default="sepolia", choices=list(CHAINS.keys()))
+    p_init.add_argument("--contract", default=None, help="DewDrops contract address")
+    p_init.add_argument("--rpc", default=None, help="RPC URL")
+    p_init.set_defaults(func=lambda a, c: cmd_init_config(c, a.chain, a.contract, a.rpc))
+
+    p_elig = subparsers.add_parser("check-eligibility", help="Check if address is in leaves for task")
+    p_elig.add_argument("task_id", help="Task ID")
+    p_elig.add_argument("address", help="Address to check")
+    p_elig.add_argument("--leaves", default=None, help="Leaves JSON path")
+    p_elig.set_defaults(func=lambda a, c: cmd_check_eligibility(c, a.task_id, a.address, a.leaves))
+
+    p_export = subparsers.add_parser("export-merkle", help="Export merkle root and proofs for guardian")
+    p_export.add_argument("task_id", help="Task ID")
+    p_export.add_argument("--leaves", default=None)
+    p_export.add_argument("--output", default=None)
+    p_export.set_defaults(func=lambda a, c: cmd_export_merkle(c, a.task_id, a.leaves, a.output))
+
+# -----------------------------------------------------------------------------
+# Extended ABI (more view functions for UI)
+# -----------------------------------------------------------------------------
+
+DEW_DROPS_ABI_EXTENDED = DEW_DROPS_ABI + [
+    {"inputs": [{"name": "taskId", "type": "bytes32"}, {"name": "account", "type": "address"}], "name": "getVestedAmount", "outputs": [{"name": "claimable", "type": "uint256"}], "stateMutability": "view", "type": "function"},
+    {"inputs": [{"name": "taskId", "type": "bytes32"}], "name": "blocksRemaining", "outputs": [{"name": "", "type": "uint256"}], "stateMutability": "view", "type": "function"},
+    {"inputs": [{"name": "taskId", "type": "bytes32"}], "name": "getTaskSummary", "outputs": [{"name": "reward", "type": "uint256"}, {"name": "endBlock", "type": "uint256"}, {"name": "poolBal", "type": "uint256"}, {"name": "claimed", "type": "uint256"}, {"name": "active", "type": "bool"}], "stateMutability": "view", "type": "function"},
+    {"inputs": [], "name": "getGlobalStats", "outputs": [{"name": "totalTasks", "type": "uint256"}, {"name": "totalClaimedWei", "type": "uint256"}, {"name": "balanceWei", "type": "uint256"}], "stateMutability": "view", "type": "function"},
+]
+
+# -----------------------------------------------------------------------------
